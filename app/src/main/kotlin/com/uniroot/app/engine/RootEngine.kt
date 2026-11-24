@@ -314,36 +314,46 @@ class RootEngine(private val context: Context) {
     }
 
     /**
-     * The ONLY state that counts as rooted for the UI: a WORKING su (uid=0).
-     * The kernel module alone can be a half-dead boot leftover (module loaded,
-     * ksud dead) — trusting it flipped the main button to "Disable root" and
-     * blocked re-rooting until the app was reinstalled.
+     * Live root state for the current kernel boot:
+     * 1. A working `su -c id` (uid=0) always counts as rooted (and stamps the
+     *    current kernel boot_id).
+     * 2. A recorded successful root for this exact `/proc/sys/kernel/random/boot_id`
+     *    persists across zygote / surfaceflinger soft reboots even when UniRoot
+     *    itself has not been granted su, and resets automatically on a real reboot.
      */
-    fun rootAlive(): Boolean = runCatching {
-        val p = ProcessBuilder("su", "-c", "id").start()
-        val done = p.waitFor(4, java.util.concurrent.TimeUnit.SECONDS)
-        if (!done) { runCatching { p.destroy() }; return false }
-        p.inputStream.bufferedReader().use { it.readText() }.contains("uid=0")
-    }.getOrDefault(false)
+    fun rootAlive(): Boolean {
+        val suOk = runCatching {
+            val p = ProcessBuilder("su", "-c", "id").start()
+            val done = p.waitFor(4, java.util.concurrent.TimeUnit.SECONDS)
+            if (!done) { runCatching { p.destroy() }; false }
+            else p.inputStream.bufferedReader().use { it.readText() }.contains("uid=0")
+        }.getOrDefault(false)
+        if (suOk) {
+            BootRootState.markRooted(context, loadedKsuFlavor())
+            return true
+        }
+        return BootRootState.isRootedThisBoot(context)
+    }
 
-    fun markRooted(profileName: String) {
+    fun markRooted(profileName: String, explicitFlavor: String? = null) {
         val set = prefs.getStringSet("rooted_profiles", emptySet()).orEmpty().toMutableSet()
         set.add(profileName)
-        prefs.edit().putStringSet("rooted_profiles", set).apply()
-        profileByName(profileName)?.let { prefs.edit().putString("loaded_flavor", it.flavor).apply() }
+        val flavor = explicitFlavor ?: profileByName(profileName)?.flavor
+        prefs.edit().apply {
+            putStringSet("rooted_profiles", set)
+            if (!flavor.isNullOrBlank()) putString("loaded_flavor", flavor)
+        }.commit()
+        BootRootState.markRooted(context, flavor)
         _rooted.value = true
     }
 
     /** Flavor of the KernelSU module currently loaded (recorded at root time) — used by auto-root. */
-    fun loadedKsuFlavor(): String? = prefs.getString("loaded_flavor", null)
-
-
-
-
-
+    fun loadedKsuFlavor(): String? =
+        BootRootState.rootedFlavorThisBoot(context) ?: prefs.getString("loaded_flavor", null)
 
     fun clearRootedFlag() {
-        prefs.edit().remove("rooted_profiles").apply()
+        prefs.edit().remove("rooted_profiles").commit()
+        BootRootState.clear(context)
         _rooted.value = false
     }
 
@@ -525,13 +535,12 @@ class RootEngine(private val context: Context) {
     // KernelSU manager app (external): force-stop + relaunch after a run
     // ---------------------------------------------------------------------
 
+    fun findKsuManager(next: Boolean = false): KsuManagerMatch? =
+        KsuManagerDetector.find(context, next)
+
     fun isKsuManagerInstalled(next: Boolean = false): Pair<Boolean, String> {
-        val packages = if (next) listOf("com.rifsxd.ksunext", "com.rifsxd.ksunext.debug")
-        else listOf("me.weishu.kernelsu", "me.weishu.kernelsu.pr")
-        for (pkg in packages) {
-            if (runCatching { context.packageManager.getPackageInfo(pkg, 0) }.isSuccess) return true to pkg
-        }
-        return false to ""
+        val match = findKsuManager(next)
+        return if (match != null) true to match.packageName else false to ""
     }
 
     /** Kills a stale manager so it re-reads the freshly loaded module (shell can force-stop). */
@@ -608,8 +617,9 @@ class RootEngine(private val context: Context) {
     fun detectDevice(): DeviceInfo {
         val model = Build.MODEL ?: ""
         val incremental = Build.VERSION.INCREMENTAL ?: ""
-        val kernel = runCatching { File("/proc/version").readText() }.getOrDefault("")
+        val procVersion = runCatching { File("/proc/version").readText() }.getOrDefault("")
             .substringAfter("Linux version ", "").substringBefore(" (").trim()
+        val kernel = procVersion.ifEmpty { System.getProperty("os.version") ?: "" }.trim()
         val matched: String? = when {
             (model.startsWith("SM-F971") || model.startsWith("SM-F976")) && kernel.contains("6.12.58") -> "F976X 6.12.58"
             model.startsWith("SM-S948") && kernel.contains("6.12.69") -> "S26 Ultra 6.12.69 ZZHK"
@@ -617,9 +627,12 @@ class RootEngine(private val context: Context) {
             model.startsWith("SM-S931") && kernel.contains("6.6.127") && incremental.contains("ZZHL") -> "S25 6.6.127 ZZHL"
             else -> null
         }
+        val socModel = runCatching { Build.SOC_MODEL }.getOrNull().orEmpty()
         val soc = when {
-            model.startsWith("SM-S948") -> "Snapdragon 8 Elite Gen 5"
-            model.startsWith("SM-S93") -> "Snapdragon 8 Elite"
+            model.startsWith("SM-S948") || socModel.equals("SM8850", ignoreCase = true) -> "Snapdragon 8 Elite Gen 5"
+            model.startsWith("SM-S93") || model.startsWith("SM-F966") ||
+                socModel.equals("SM8750", ignoreCase = true) -> "Snapdragon 8 Elite"
+            socModel.isNotBlank() -> socModel
             else -> "-"
         }
         return DeviceInfo(model, kernel.ifEmpty { incremental }, soc, matched)
