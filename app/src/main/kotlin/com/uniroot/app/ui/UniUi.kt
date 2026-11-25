@@ -73,6 +73,7 @@ import androidx.compose.ui.unit.sp
 import com.uniroot.app.BuildConfig
 import com.uniroot.app.R
 import com.uniroot.app.engine.DeviceProfile
+import com.uniroot.app.engine.KernelManagerType
 import com.uniroot.app.engine.RunLogFile
 import com.uniroot.app.newmethod.KsudClassicProfiles
 import com.uniroot.app.newmethod.KsudNextProfile
@@ -168,6 +169,12 @@ data class UniUiState(
     val selinuxRow: String = "",
     val dirtyFragSupported: Boolean = false,
     val rootabilityDetail: String = "",
+    val kernelManagerId: String = KernelManagerType.AUTO.id,
+    val customManagerPackage: String = "",
+    val detectedManagerStatus: String = "",
+    val customKsudStatus: String = "",
+    val managerFetchRunning: Boolean = false,
+    val managerFetchStatus: String = "",
 )
 
 interface UniActions {
@@ -194,6 +201,11 @@ interface UniActions {
     fun onProfileSelected(index: Int)
     fun onShizukuChanged(enabled: Boolean)
     fun onKsuFlavorChanged(next: Boolean)
+    fun onKernelManagerChanged(id: String)
+    fun onCustomManagerPackageChanged(pkg: String)
+    fun onImportCustomKsud(uri: Uri)
+    fun onFetchManagerKsud()
+    fun onClearCustomKsud()
     fun onResetProfiles()
     fun onProfileSave(profile: DeviceProfile, originalName: String?)
     fun onProfileDelete(name: String)
@@ -948,6 +960,11 @@ private fun ControlPanel(
             onSelect = actions::onKsuFlavorChanged,
             modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
         )
+        KernelManagerCard(
+            state = state,
+            actions = actions,
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+        )
 
         if (!state.newMethod) {
             if (state.profiles.isNotEmpty()) {
@@ -1260,6 +1277,132 @@ private fun FlavorSwitch(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(text = label, color = fg, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun KernelManagerCard(
+    state: UniUiState,
+    actions: UniActions,
+    modifier: Modifier = Modifier,
+) {
+    val managers = KernelManagerType.entries
+    val selected = KernelManagerType.fromId(state.kernelManagerId)
+    val selectedIdx = managers.indexOf(selected).coerceAtLeast(0)
+    var customPkgDraft by rememberSaveable(state.customManagerPackage) {
+        mutableStateOf(state.customManagerPackage)
+    }
+    val ksudPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) actions.onImportCustomKsud(uri)
+    }
+
+    Card(modifier = modifier) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            OverlaySpinnerPreference(
+                title = "Kernel manager",
+                items = managers.map { DropdownItem(icon = null, title = it.displayName) },
+                selectedIndex = selectedIdx,
+                showValue = true,
+                onSelectedIndexChange = { idx ->
+                    managers.getOrNull(idx)?.let { actions.onKernelManagerChanged(it.id) }
+                },
+            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (state.detectedManagerStatus.isNotBlank()) {
+                    Text(
+                        text = state.detectedManagerStatus,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MiuixTheme.colorScheme.onSurface.copy(alpha = 0.82f),
+                    )
+                }
+                Text(
+                    text = selected.summary,
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onSurface.copy(alpha = 0.62f),
+                )
+                if (selected == KernelManagerType.CUSTOM) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextField(
+                            value = customPkgDraft,
+                            onValueChange = { customPkgDraft = it },
+                            label = "Manager package ID",
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            text = stringResource(R.string.save),
+                            colors = ButtonDefaults.textButtonColorsPrimary(),
+                            onClick = { actions.onCustomManagerPackageChanged(customPkgDraft.trim()) },
+                        )
+                    }
+                }
+                if (state.newMethod) {
+                    val activeKdpLabel = if (state.ksuNextMode) {
+                        val label = state.ksudNextProfiles.firstOrNull { it.id == state.ksudNextProfileId }?.label
+                            ?: state.ksudNextProfiles.firstOrNull()?.label ?: "bundled Next"
+                        "Using KDP ksud: $label (KernelSU Next)"
+                    } else {
+                        val label = state.ksudClassicProfiles.firstOrNull { it.id == state.ksudClassicProfileId }?.label
+                            ?: state.ksudClassicProfiles.firstOrNull()?.label ?: "bundled Classic"
+                        "Using KDP ksud: $label (KernelSU Classic)"
+                    }
+                    Text(
+                        text = state.customKsudStatus.ifBlank { activeKdpLabel },
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MiuixTheme.colorScheme.primary,
+                    )
+                    if (selected.prefersCustomKsud || state.customKsudStatus.isNotBlank()) {
+                        if (state.managerFetchStatus.isNotBlank()) {
+                            Text(
+                                text = state.managerFetchStatus,
+                                fontSize = 11.sp,
+                                color = MiuixTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+                            )
+                        }
+                        if (selected.githubRepos.isNotEmpty()) {
+                            TextButton(
+                                text = if (state.managerFetchRunning) {
+                                    "Fetching ${selected.displayName} ksud…"
+                                } else {
+                                    "Fetch ${selected.displayName} ksud from GitHub"
+                                },
+                                enabled = !state.managerFetchRunning,
+                                colors = ButtonDefaults.textButtonColorsPrimary(),
+                                onClick = actions::onFetchManagerKsud,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            TextButton(
+                                text = if (state.customKsudStatus.isNotBlank()) "Replace custom ksud" else "Import custom ksud (optional)",
+                                onClick = { ksudPicker.launch(arrayOf("*/*")) },
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (state.customKsudStatus.isNotBlank()) {
+                                TextButton(
+                                    text = "Use KDP ksud",
+                                    onClick = actions::onClearCustomKsud,
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }

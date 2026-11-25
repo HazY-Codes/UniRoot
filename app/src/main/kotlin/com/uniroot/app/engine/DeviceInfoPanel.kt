@@ -93,6 +93,9 @@ object DeviceInfoPanel {
         "SM-X218" to "Galaxy Tab A9+", "SM-X216" to "Galaxy Tab A9+",
         "SM-X210" to "Galaxy Tab A9+", "SM-X115" to "Galaxy Tab A9",
         "SM-X110" to "Galaxy Tab A9",
+        "SM-X238" to "Galaxy Tab A11+", "SM-X236" to "Galaxy Tab A11+",
+        "SM-X230" to "Galaxy Tab A11+", "SM-X135" to "Galaxy Tab A11",
+        "SM-X133" to "Galaxy Tab A11", "SM-X130" to "Galaxy Tab A11",
     )
 
     private val PRE_GKI_MODEL_PREFIXES = listOf(
@@ -102,7 +105,8 @@ object DeviceInfoPanel {
     )
 
     private val MT6789_MODEL_PREFIXES = listOf(
-        "SM-A155", "SM-A165", "SM-A075", "SM-A245", "SM-X110", "SM-X115",
+        "SM-A155", "SM-A165", "SM-A075", "SM-A245",
+        "SM-X110", "SM-X115", "SM-X130", "SM-X133", "SM-X135",
     )
 
     private val BUNDLED_DF_KMIS = setOf(
@@ -191,7 +195,10 @@ object DeviceInfoPanel {
     }
 
     internal fun isMt6789Platform(model: String, socModel: String = ""): Boolean {
-        if (socModel.contains("MT6789", ignoreCase = true) || socModel.contains("G99", ignoreCase = true)) {
+        if (socModel.contains("MT6789", ignoreCase = true) ||
+            socModel.contains("MT8781", ignoreCase = true) ||
+            socModel.contains("G99", ignoreCase = true)
+        ) {
             return true
         }
         val norm = normalizeSamsungModel(model)
@@ -387,13 +394,33 @@ object DeviceInfoPanel {
     }
 
     fun flavor(context: Context): String {
-        val next = KsuManagerDetector.find(context, next = true)
-        val classic = KsuManagerDetector.find(context, next = false)
-        return when {
-            next != null && classic != null -> "KernelSU Next + classic installed"
-            next != null -> if (next.spoofed) "KernelSU Next (spoofed)" else "KernelSU Next"
-            classic != null -> if (classic.spoofed) "KernelSU (spoofed)" else "KernelSU"
-            else -> "no manager installed"
+        val prefs = context.getSharedPreferences("uniroot_prefs", Context.MODE_PRIVATE)
+        val selected = KernelManagerType.fromId(prefs.getString("kernel_manager_id", KernelManagerType.AUTO.id))
+        val customPkg = prefs.getString("custom_manager_package", "").orEmpty()
+        if (selected != KernelManagerType.AUTO) {
+            val match = KsuManagerDetector.find(context, selected, ksuNextFallback = false, customPackage = customPkg)
+            return when {
+                match != null && match.spoofed -> "${selected.displayName} (spoofed)"
+                match != null -> selected.displayName
+                else -> "${selected.displayName} (not installed)"
+            }
         }
+        val next = KsuManagerDetector.find(context, KernelManagerType.KERNELSU_NEXT, ksuNextFallback = true)
+        val classic = KsuManagerDetector.find(context, KernelManagerType.KERNELSU, ksuNextFallback = false)
+        if (next != null && classic != null) return "KernelSU Next + classic installed"
+        if (next != null) return if (next.spoofed) "KernelSU Next (spoofed)" else "KernelSU Next"
+        if (classic != null) return if (classic.spoofed) "KernelSU (spoofed)" else "KernelSU"
+        for (alt in listOf(
+            KernelManagerType.SUKISU_NOVA,
+            KernelManagerType.BAKASU,
+            KernelManagerType.YUKISU,
+            KernelManagerType.XECKERNEL,
+            KernelManagerType.RKSU_WILDKSU,
+            KernelManagerType.KOWSU,
+        )) {
+            val m = KsuManagerDetector.find(context, alt, ksuNextFallback = false)
+            if (m != null) return if (m.spoofed) "${alt.displayName} (spoofed)" else alt.displayName
+        }
+        return "no manager installed"
     }
 }

@@ -51,6 +51,10 @@ class UniRootFixesTest {
         assertEquals("Galaxy A36 5G (SM-A366B)", DeviceInfoPanel.marketingNameFor("SM-A366B"))
         assertEquals("Galaxy A56 5G (SM-A566B/DS)", DeviceInfoPanel.marketingNameFor("SM-A566B/DS"))
         assertEquals("Galaxy Tab A9+ (SM-X216B)", DeviceInfoPanel.marketingNameFor("SM-X216B"))
+        assertEquals("Galaxy Tab A11 (SM-X130)", DeviceInfoPanel.marketingNameFor("SM-X130"))
+        assertEquals("Galaxy Tab A11 (SM-X135F)", DeviceInfoPanel.marketingNameFor("SM-X135F"))
+        assertEquals("Galaxy Tab A11+ (SM-X230)", DeviceInfoPanel.marketingNameFor("SM-X230"))
+        assertEquals("Galaxy Tab A11+ (SM-X238U)", DeviceInfoPanel.marketingNameFor("SM-X238U"))
         assertEquals("SM-X999", DeviceInfoPanel.marketingNameFor("SM-X999"))
     }
 
@@ -234,5 +238,139 @@ class UniRootFixesTest {
         assertEquals("3.4.0", parsed340.version)
         assertEquals("kdp-samsung", parsed340.variant)
         assertEquals("3.4.0 · kdp-samsung", parsed340.label)
+    }
+
+    @Test
+    fun recognizesAllSupportedKernelManagersAndSpoofedForks() {
+        assertEquals(
+            com.uniroot.app.engine.KernelManagerType.SUKISU_NOVA,
+            com.uniroot.app.engine.KernelManagerType.fromId("sukisu_nova"),
+        )
+        assertEquals(
+            com.uniroot.app.engine.KernelManagerType.BAKASU,
+            com.uniroot.app.engine.KernelManagerType.fromId("bakasu"),
+        )
+        assertEquals(
+            com.uniroot.app.engine.KernelManagerType.YUKISU,
+            com.uniroot.app.engine.KernelManagerType.fromId("yukisu"),
+        )
+        assertEquals(
+            com.uniroot.app.engine.KernelManagerType.XECKERNEL,
+            com.uniroot.app.engine.KernelManagerType.fromId("xeckernel"),
+        )
+        assertEquals(
+            com.uniroot.app.engine.KernelManagerType.RKSU_WILDKSU,
+            com.uniroot.app.engine.KernelManagerType.fromId("rksu_wildksu"),
+        )
+        assertEquals(
+            com.uniroot.app.engine.KernelManagerType.KOWSU,
+            com.uniroot.app.engine.KernelManagerType.fromId("kowsu"),
+        )
+        assertEquals(
+            com.uniroot.app.engine.KernelManagerType.AUTO,
+            com.uniroot.app.engine.KernelManagerType.fromId("unknown-id"),
+        )
+
+        assertTrue(
+            KsuManagerDetector.matchesManagerMetadata(
+                type = com.uniroot.app.engine.KernelManagerType.SUKISU_NOVA,
+                packageName = "com.sukisu.ultra",
+                appLabel = "SukiSU-Nova",
+                versionName = "13000",
+            ),
+        )
+        assertTrue(
+            KsuManagerDetector.matchesManagerMetadata(
+                type = com.uniroot.app.engine.KernelManagerType.BAKASU,
+                packageName = "com.resukisu.resukisu",
+                appLabel = "BakaSU",
+                versionName = "1.0",
+            ),
+        )
+        assertTrue(
+            KsuManagerDetector.matchesManagerMetadata(
+                type = com.uniroot.app.engine.KernelManagerType.YUKISU,
+                packageName = "com.random.spoofedpkg",
+                appLabel = "YukiSU",
+                versionName = "3.0-spoofed",
+            ),
+        )
+        assertTrue(
+            KsuManagerDetector.matchesManagerMetadata(
+                type = com.uniroot.app.engine.KernelManagerType.XECKERNEL,
+                packageName = "com.xeckernel.ultra",
+                appLabel = "XECKernel Ultra",
+                versionName = "2.1",
+            ),
+        )
+        assertTrue(
+            KsuManagerDetector.matchesManagerMetadata(
+                type = com.uniroot.app.engine.KernelManagerType.KOWSU,
+                packageName = "com.random.pkg",
+                appLabel = "KernelSU-KoWSU",
+                versionName = "1.2",
+            ),
+        )
+        assertTrue(
+            KsuManagerDetector.matchesManagerMetadata(
+                type = com.uniroot.app.engine.KernelManagerType.RKSU_WILDKSU,
+                packageName = "com.random.pkg",
+                appLabel = "WildKSU",
+                versionName = "1.0",
+            ),
+        )
+        assertFalse(
+            KsuManagerDetector.matchesManagerMetadata(
+                type = com.uniroot.app.engine.KernelManagerType.SUKISU_NOVA,
+                packageName = "com.example.unrelated",
+                appLabel = "Calculator",
+                versionName = "1.0",
+            ),
+        )
+        // Third-party managers keep whichever KDP ksud (Classic or Next) is currently selected.
+        listOf(
+            com.uniroot.app.engine.KernelManagerType.SUKISU_NOVA,
+            com.uniroot.app.engine.KernelManagerType.BAKASU,
+            com.uniroot.app.engine.KernelManagerType.YUKISU,
+            com.uniroot.app.engine.KernelManagerType.XECKERNEL,
+            com.uniroot.app.engine.KernelManagerType.RKSU_WILDKSU,
+            com.uniroot.app.engine.KernelManagerType.KOWSU,
+            com.uniroot.app.engine.KernelManagerType.CUSTOM,
+        ).forEach { mgr ->
+            assertNull("${mgr.displayName} should not force-switch away from active KDP ksud", mgr.prefersNextBackend)
+        }
+    }
+
+    @Test
+    fun selectsBestKsudAssetPrioritizingKdpAndArm64() {
+        val kdpPreferred = com.uniroot.app.newmethod.ManagerReleaseFetcher.selectBestKsudAsset(
+            listOf(
+                Triple("ksud-x86_64-linux-android", "https://example.invalid/x86", 2_000_000L),
+                Triple("ksud-aarch64-linux-android", "https://example.invalid/std", 2_000_000L),
+                Triple("ksud-aarch64-kdp-samsung", "https://example.invalid/kdp", 2_100_000L),
+                Triple("Manager_v1.0.apk", "https://example.invalid/apk", 8_000_000L),
+            ),
+        )
+        assertNotNull(kdpPreferred)
+        assertEquals("ksud-aarch64-kdp-samsung", kdpPreferred!!.name)
+        assertTrue(kdpPreferred.isKdpTagged)
+
+        val zipOverApk = com.uniroot.app.newmethod.ManagerReleaseFetcher.selectBestKsudAsset(
+            listOf(
+                Triple("ksud-aarch64-linux-android.zip", "https://example.invalid/zip", 1_500_000L),
+                Triple("SukiSU_v13000.apk", "https://example.invalid/apk", 9_000_000L),
+            ),
+        )
+        assertNotNull(zipOverApk)
+        assertEquals(com.uniroot.app.newmethod.ManagerReleaseFetcher.AssetKind.ZIP_ARCHIVE, zipOverApk!!.kind)
+
+        val apkFallback = com.uniroot.app.newmethod.ManagerReleaseFetcher.selectBestKsudAsset(
+            listOf(
+                Triple("ksud-x86_64.zip", "https://example.invalid/x86", 1_500_000L),
+                Triple("YukiSU_release.apk", "https://example.invalid/apk", 9_000_000L),
+            ),
+        )
+        assertNotNull(apkFallback)
+        assertEquals(com.uniroot.app.newmethod.ManagerReleaseFetcher.AssetKind.APK_EMBEDDED_KSUD, apkFallback!!.kind)
     }
 }

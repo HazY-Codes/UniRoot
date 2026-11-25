@@ -92,6 +92,12 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
     private var ksudUpdateSheetVisible by mutableStateOf(false)
     private var ksudUpdateProgress by mutableIntStateOf(0)
     private var ksudUpdateStage by mutableStateOf("")
+    private var kernelManagerId by mutableStateOf(com.uniroot.app.engine.KernelManagerType.AUTO.id)
+    private var customManagerPackage by mutableStateOf("")
+    private var detectedManagerStatus by mutableStateOf("")
+    private var customKsudStatus by mutableStateOf("")
+    private var managerFetchRunning by mutableStateOf(false)
+    private var managerFetchStatus by mutableStateOf("")
     private var pendingInstant: InstantRoot? = null
     private var pendingProfileName by mutableStateOf<String?>(null)
 
@@ -104,6 +110,8 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
         latestKsuTag = engine.latestKsuTag()
         autoRootOnBoot = engine.autoRootOnBoot
         ksuNextMode = engine.ksuFlavor == "kernelsu_next"
+        kernelManagerId = engine.kernelManagerId
+        customManagerPackage = engine.customManagerPackage
         // New méthode : profils ksud Next embarqués + sélection persistée.
         ksudNextProfiles = KsudNextProfiles.list(this)
         ksudNextProfileId = KsudNextProfiles.selected(this)?.id ?: ""
@@ -128,6 +136,7 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
         runLogs = engine.listRunLogs()
         refreshInstantRootState()
         refreshDevice()
+        refreshKernelManagerState()
         refreshDeviceInfoPanel()
         refreshProfiles()
         checkRootMyGalaxy(silent = true)
@@ -148,6 +157,12 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
                     selinuxRow = selinuxRow,
                     dirtyFragSupported = dirtyFragSupported,
                     rootabilityDetail = rootabilityDetail,
+                    kernelManagerId = kernelManagerId,
+                    customManagerPackage = customManagerPackage,
+                    detectedManagerStatus = detectedManagerStatus,
+                    customKsudStatus = customKsudStatus,
+                    managerFetchRunning = managerFetchRunning,
+                    managerFetchStatus = managerFetchStatus,
                     kernelSupported = selectedProfileName != null,
                     rooted = rooted,
                     running = running,
@@ -384,6 +399,91 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
                             .putBoolean(com.uniroot.app.newmethod.NewMethodBootReceiver.PREF_NEXT, next)
                             .apply()
                         refreshProfiles()
+                        refreshKernelManagerState()
+                        refreshDeviceInfoPanel()
+                    }
+                    override fun onKernelManagerChanged(id: String) {
+                        val type = com.uniroot.app.engine.KernelManagerType.fromId(id)
+                        kernelManagerId = type.id
+                        engine.kernelManagerId = type.id
+                        // Align backend flavor automatically when the manager specifies one.
+                        type.prefersNextBackend?.let { wantNext ->
+                            if (ksuNextMode != wantNext) {
+                                onKsuFlavorChanged(wantNext)
+                                return
+                            }
+                        }
+                        refreshKernelManagerState()
+                        refreshDeviceInfoPanel()
+                    }
+                    override fun onCustomManagerPackageChanged(pkg: String) {
+                        customManagerPackage = pkg.trim()
+                        engine.customManagerPackage = customManagerPackage
+                        refreshKernelManagerState()
+                        refreshDeviceInfoPanel()
+                        Toast.makeText(
+                            this@MainActivity,
+                            if (customManagerPackage.isNotBlank()) "Saved manager: $customManagerPackage" else "Custom manager cleared",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                    override fun onImportCustomKsud(uri: Uri) {
+                        lifecycleScope.launch {
+                            val res = withContext(Dispatchers.IO) {
+                                engine.importCustomKsud(uri, ksuNextMode)
+                            }
+                            refreshKernelManagerState()
+                            val msg = res.getOrElse { "Import failed: ${it.message}" }
+                            managerFetchStatus = msg
+                            engine.appendLog("[CustomKsud] $msg")
+                            Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    override fun onFetchManagerKsud() {
+                        if (managerFetchRunning) return
+                        val mgr = engine.selectedKernelManager()
+                        if (mgr.githubRepos.isEmpty()) {
+                            Toast.makeText(this@MainActivity, "No GitHub repo for ${mgr.displayName}", Toast.LENGTH_SHORT).show()
+                            return
+                        }
+                        managerFetchRunning = true
+                        managerFetchStatus = "Checking ${mgr.githubRepos.first()}…"
+                        lifecycleScope.launch {
+                            val res = runCatching {
+                                withContext(Dispatchers.IO) {
+                                    com.uniroot.app.newmethod.ManagerReleaseFetcher.fetchLatest(
+                                        context = this@MainActivity,
+                                        manager = mgr,
+                                        destFile = engine.customKsudFile(ksuNextMode),
+                                        log = { line ->
+                                            engine.appendLog("[ManagerFetch] $line")
+                                            runOnUiThread { managerFetchStatus = line }
+                                        },
+                                    )
+                                }
+                            }
+                            managerFetchRunning = false
+                            refreshKernelManagerState()
+                            res.onSuccess { r ->
+                                val kdpNote = if (r.kdpTagged) "KDP-tagged" else "upstream (non-KDP)"
+                                val msg = "Fetched ${r.repo} ${r.tag} (${r.assetName}, $kdpNote)"
+                                managerFetchStatus = msg
+                                engine.appendLog("[ManagerFetch] $msg")
+                                Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                            }.onFailure { e ->
+                                val msg = "Fetch failed: ${e.message}"
+                                managerFetchStatus = msg
+                                engine.appendLog("[ManagerFetch] $msg")
+                                Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                    override fun onClearCustomKsud() {
+                        engine.clearCustomKsud(ksuNextMode)
+                        managerFetchStatus = ""
+                        refreshKernelManagerState()
+                        engine.appendLog("[CustomKsud] Reset to bundled ksud")
+                        Toast.makeText(this@MainActivity, "Reset to bundled ksud", Toast.LENGTH_SHORT).show()
                     }
                     override fun onResetProfiles() = resetProfiles()
                     override fun onProfileSave(profile: DeviceProfile, originalName: String?) {
@@ -461,6 +561,7 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
         // Keep rooted status accurate across soft reboots and manager grants.
         lifecycleScope.launch {
             withContext(Dispatchers.IO) { engine.refreshRootedLive() }
+            refreshKernelManagerState()
             refreshDeviceInfoPanel()
         }
         // Landing after the setup soft reboot: prompt the helper install, or
@@ -471,6 +572,23 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
 
     override fun onRequestPermissionResult(requestCode: Int, result: Int) {
         permissionTick++
+    }
+
+    private fun refreshKernelManagerState() {
+        val match = engine.findKsuManager(ksuNextMode)
+        detectedManagerStatus = if (match != null) {
+            val ver = match.versionName?.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+            val spoofTag = if (match.spoofed) " · spoofed" else ""
+            "Installed: ${match.managerName.ifBlank { match.packageName }}$ver$spoofTag"
+        } else {
+            val sel = engine.selectedKernelManager()
+            if (sel == com.uniroot.app.engine.KernelManagerType.CUSTOM && customManagerPackage.isBlank()) {
+                "Enter an installed manager package ID below"
+            } else {
+                "Not installed — install ${sel.displayName} APK or choose another manager"
+            }
+        }
+        customKsudStatus = engine.customKsudStatus(ksuNextMode)
     }
 
     private fun refreshDeviceInfoPanel() {

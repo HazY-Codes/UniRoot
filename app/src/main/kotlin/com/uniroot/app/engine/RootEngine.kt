@@ -80,6 +80,16 @@ class RootEngine(private val context: Context) {
         get() = prefs.getString("ksu_flavor", "kernelsu") ?: "kernelsu"
         set(value) = prefs.edit().putString("ksu_flavor", value).apply()
 
+    /** Selected kernel manager option id (see KernelManagerType). */
+    var kernelManagerId: String
+        get() = prefs.getString("kernel_manager_id", KernelManagerType.AUTO.id) ?: KernelManagerType.AUTO.id
+        set(value) = prefs.edit().putString("kernel_manager_id", value).apply()
+
+    /** Custom manager package ID when kernelManagerId == "custom". */
+    var customManagerPackage: String
+        get() = prefs.getString("custom_manager_package", "") ?: ""
+        set(value) = prefs.edit().putString("custom_manager_package", value.trim()).apply()
+
     /**
      * New method — profil ksud Next choisi sur l'accueil (id du fichier dans
      * assets/df/ksud-next/). "" = défaut (profil le plus récent), cf.
@@ -535,12 +545,62 @@ class RootEngine(private val context: Context) {
     // KernelSU manager app (external): force-stop + relaunch after a run
     // ---------------------------------------------------------------------
 
+    fun selectedKernelManager(): KernelManagerType = KernelManagerType.fromId(kernelManagerId)
+
     fun findKsuManager(next: Boolean = false): KsuManagerMatch? =
-        KsuManagerDetector.find(context, next)
+        KsuManagerDetector.find(
+            context = context,
+            managerType = selectedKernelManager(),
+            ksuNextFallback = next,
+            customPackage = customManagerPackage,
+        )
 
     fun isKsuManagerInstalled(next: Boolean = false): Pair<Boolean, String> {
         val match = findKsuManager(next)
         return if (match != null) true to match.packageName else false to ""
+    }
+
+    /** Custom ksud slot read by DFBridge.stageKsud (wins over bundled profiles). */
+    fun customKsudFile(next: Boolean): File =
+        File(context.filesDir.parentFile ?: context.filesDir, if (next) "ksud-custom-next" else "ksud-custom-classic")
+
+    fun customKsudStatus(next: Boolean): String {
+        val f = customKsudFile(next)
+        if (!f.isFile || f.length() <= 100_000L) return ""
+        val mb = f.length() / (1024.0 * 1024.0)
+        return String.format("Custom ksud active (%.2f MB)", mb)
+    }
+
+    fun importCustomKsud(uri: android.net.Uri, next: Boolean): Result<String> = runCatching {
+        val dest = customKsudFile(next)
+        val tmp = File(dest.parentFile, dest.name + ".tmp")
+        val stream = context.contentResolver.openInputStream(uri)
+            ?: error("Could not read selected file")
+        stream.use { input ->
+            FileOutputStream(tmp).use { output -> input.copyTo(output) }
+        }
+        require(tmp.length() > 100_000L) {
+            tmp.delete()
+            "File too small (${tmp.length()} bytes) — select an arm64 ksud binary"
+        }
+        val magic = ByteArray(4)
+        tmp.inputStream().use { it.read(magic) }
+        require(magic[0] == 0x7f.toByte() && magic[1] == 'E'.code.toByte() && magic[2] == 'L'.code.toByte() && magic[3] == 'F'.code.toByte()) {
+            tmp.delete()
+            "Selected file is not an ELF binary (ksud)"
+        }
+        if (dest.exists()) dest.delete()
+        require(tmp.renameTo(dest)) { "Could not save custom ksud" }
+        dest.setReadable(true, false)
+        dest.setExecutable(true, false)
+        customKsudStatus(next)
+    }
+
+    fun clearCustomKsud(next: Boolean): Boolean {
+        val f = customKsudFile(next)
+        val existed = f.isFile
+        runCatching { f.delete() }
+        return existed
     }
 
     /** Kills a stale manager so it re-reads the freshly loaded module (shell can force-stop). */
@@ -667,9 +727,10 @@ class RootEngine(private val context: Context) {
         normModel.startsWith("SM-G97") || normModel.startsWith("SM-N97") ||
             normModel.startsWith("SM-F90") || normModel.startsWith("SM-F700") ||
             socModel.equals("SM8150", ignoreCase = true) -> "Snapdragon 855"
-        // MediaTek platforms (Tab S10, A15, A16, A34, A07, Tab A9)
+        // MediaTek platforms (Tab S10, Tab A11+, A15, A16, A34, A07, Tab A9/A11)
         normModel.startsWith("SM-X82") || normModel.startsWith("SM-X92") ||
             socModel.contains("MT6989", ignoreCase = true) -> "MediaTek Dimensity 9300+"
+        normModel.startsWith("SM-X23") || socModel.contains("MT6878", ignoreCase = true) -> "MediaTek Dimensity 7300"
         normModel.startsWith("SM-A346") || socModel.contains("MT6877", ignoreCase = true) -> "MediaTek Dimensity 1080"
         socModel.contains("MT6835T", ignoreCase = true) || socModel.contains("6300") ||
             normModel.startsWith("SM-A066") || normModel.startsWith("SM-A076") -> "MediaTek Dimensity 6300"
