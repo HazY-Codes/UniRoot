@@ -1009,8 +1009,7 @@ private fun ControlPanel(
             RunButton(
                 rooted = rootedEffective,
                 running = state.running,
-                // New method needs no profile: the button is never greyed there.
-                supported = true,
+                supported = state.dirtyFragSupported || state.rootabilityDetail.isEmpty(),
                 onRun = actions::onRun,
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
             )

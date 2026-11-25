@@ -616,26 +616,82 @@ class RootEngine(private val context: Context) {
 
     fun detectDevice(): DeviceInfo {
         val model = Build.MODEL ?: ""
+        val norm = DeviceInfoPanel.normalizeSamsungModel(model)
         val incremental = Build.VERSION.INCREMENTAL ?: ""
         val procVersion = runCatching { File("/proc/version").readText() }.getOrDefault("")
             .substringAfter("Linux version ", "").substringBefore(" (").trim()
         val kernel = procVersion.ifEmpty { System.getProperty("os.version") ?: "" }.trim()
         val matched: String? = when {
-            (model.startsWith("SM-F971") || model.startsWith("SM-F976")) && kernel.contains("6.12.58") -> "F976X 6.12.58"
-            model.startsWith("SM-S948") && kernel.contains("6.12.69") -> "S26 Ultra 6.12.69 ZZHK"
-            model.startsWith("SM-S931") && kernel.contains("6.6.127") && incremental.contains("ZZI4") -> "S25 6.6.127 ZZI4"
-            model.startsWith("SM-S931") && kernel.contains("6.6.127") && incremental.contains("ZZHL") -> "S25 6.6.127 ZZHL"
+            (norm.startsWith("SM-F971") || norm.startsWith("SM-F976")) && kernel.contains("6.12.58") -> "F976X 6.12.58"
+            norm.startsWith("SM-S948") && kernel.contains("6.12.69") -> "S26 Ultra 6.12.69 ZZHK"
+            norm.startsWith("SM-S931") && kernel.contains("6.6.127") && incremental.contains("ZZI4") -> "S25 6.6.127 ZZI4"
+            norm.startsWith("SM-S931") && kernel.contains("6.6.127") && incremental.contains("ZZHL") -> "S25 6.6.127 ZZHL"
+            norm.startsWith("SM-S93") -> "S93XX (Samsung S25)"
             else -> null
         }
         val socModel = runCatching { Build.SOC_MODEL }.getOrNull().orEmpty()
-        val soc = when {
-            model.startsWith("SM-S948") || socModel.equals("SM8850", ignoreCase = true) -> "Snapdragon 8 Elite Gen 5"
-            model.startsWith("SM-S93") || model.startsWith("SM-F966") ||
-                socModel.equals("SM8750", ignoreCase = true) -> "Snapdragon 8 Elite"
-            socModel.isNotBlank() -> socModel
-            else -> "-"
-        }
+        val soc = resolveSocName(norm, socModel)
         return DeviceInfo(model, kernel.ifEmpty { incremental }, soc, matched)
+    }
+
+    internal fun resolveSocName(normModel: String, socModel: String): String = when {
+        normModel.startsWith("SM-S94") || normModel.startsWith("SM-F97") ||
+            socModel.equals("SM8850", ignoreCase = true) -> "Snapdragon 8 Elite Gen 5"
+        normModel.startsWith("SM-S93") || normModel.startsWith("SM-F966") ||
+            socModel.equals("SM8750", ignoreCase = true) -> "Snapdragon 8 Elite"
+        socModel.contains("2500") || socModel.equals("S5E9955", ignoreCase = true) ||
+            normModel.startsWith("SM-F766") -> "Exynos 2500"
+        normModel.startsWith("SM-S721") || normModel.startsWith("SM-S731") ||
+            normModel.startsWith("SM-F761") -> "Exynos 2400e"
+        socModel.contains("2400") || socModel.equals("S5E9945", ignoreCase = true) -> "Exynos 2400"
+        normModel.startsWith("SM-S92") || normModel.startsWith("SM-F956") || normModel.startsWith("SM-F741") ||
+            socModel.equals("SM8650", ignoreCase = true) -> "Snapdragon 8 Gen 3"
+        normModel.startsWith("SM-S91") || normModel.startsWith("SM-F946") || normModel.startsWith("SM-F731") ||
+            normModel.startsWith("SM-X71") || normModel.startsWith("SM-X81") || normModel.startsWith("SM-X91") ||
+            socModel.equals("SM8550", ignoreCase = true) -> "Snapdragon 8 Gen 2"
+        normModel.startsWith("SM-F936") || normModel.startsWith("SM-F721") ||
+            socModel.equals("SM8475", ignoreCase = true) -> "Snapdragon 8+ Gen 1"
+        socModel.contains("2200") || socModel.equals("S5E9925", ignoreCase = true) ||
+            normModel.startsWith("SM-S711") -> "Exynos 2200"
+        normModel.startsWith("SM-S90") || socModel.equals("SM8450", ignoreCase = true) -> "Snapdragon 8 Gen 1"
+        socModel.contains("2100") || socModel.equals("S5E9840", ignoreCase = true) -> "Exynos 2100"
+        normModel.startsWith("SM-G99") || normModel.startsWith("SM-F926") || normModel.startsWith("SM-F711") ||
+            socModel.equals("SM8350", ignoreCase = true) -> "Snapdragon 888"
+        socModel.contains("990") || socModel.equals("Exynos990", ignoreCase = true) -> "Exynos 990"
+        normModel.startsWith("SM-N98") || normModel.startsWith("SM-F916") || normModel.startsWith("SM-F707") ||
+            socModel.equals("SM8250", ignoreCase = true) && !normModel.startsWith("SM-G98") && !normModel.startsWith("SM-G78") -> "Snapdragon 865+"
+        normModel.startsWith("SM-G98") || normModel.startsWith("SM-G78") ||
+            socModel.equals("SM8250", ignoreCase = true) -> "Snapdragon 865"
+        socModel.contains("9825") -> "Exynos 9825"
+        socModel.contains("9820") -> "Exynos 9820"
+        normModel.startsWith("SM-G97") || normModel.startsWith("SM-N97") ||
+            normModel.startsWith("SM-F90") || normModel.startsWith("SM-F700") ||
+            socModel.equals("SM8150", ignoreCase = true) -> "Snapdragon 855"
+        // MediaTek platforms (Tab S10, A15, A16, A34, A07, Tab A9)
+        normModel.startsWith("SM-X82") || normModel.startsWith("SM-X92") ||
+            socModel.contains("MT6989", ignoreCase = true) -> "MediaTek Dimensity 9300+"
+        normModel.startsWith("SM-A346") || socModel.contains("MT6877", ignoreCase = true) -> "MediaTek Dimensity 1080"
+        socModel.contains("MT6835T", ignoreCase = true) || socModel.contains("6300") ||
+            normModel.startsWith("SM-A066") || normModel.startsWith("SM-A076") -> "MediaTek Dimensity 6300"
+        normModel.startsWith("SM-A156") || socModel.contains("MT6835", ignoreCase = true) -> "MediaTek Dimensity 6100+"
+        DeviceInfoPanel.isMt6789Platform(normModel, socModel) -> "MediaTek Helio G99 (MT6789)"
+        // Mid-range Snapdragon & Exynos (A-series & Tab A9+ / Tab S9 FE)
+        normModel.startsWith("SM-A566") || socModel.equals("S5E8855", ignoreCase = true) ||
+            socModel.contains("1580") -> "Exynos 1580"
+        normModel.startsWith("SM-A556") || normModel.startsWith("SM-E736") ||
+            socModel.equals("S5E8845", ignoreCase = true) || socModel.contains("1480") -> "Exynos 1480"
+        normModel.startsWith("SM-A366") || socModel.equals("SM6475", ignoreCase = true) -> "Snapdragon 6 Gen 3"
+        normModel.startsWith("SM-A356") || normModel.startsWith("SM-A546") || normModel.startsWith("SM-A266") ||
+            normModel.startsWith("SM-M356") || normModel.startsWith("SM-X51") || normModel.startsWith("SM-X61") ||
+            socModel.equals("S5E8835", ignoreCase = true) || socModel.contains("1380") -> "Exynos 1380"
+        normModel.startsWith("SM-A166") || normModel.startsWith("SM-A146") ||
+            socModel.equals("S5E8535", ignoreCase = true) || socModel.contains("1330") -> "Exynos 1330"
+        normModel.startsWith("SM-A536") || normModel.startsWith("SM-A336") || normModel.startsWith("SM-A256") ||
+            socModel.equals("S5E8825", ignoreCase = true) || socModel.contains("1280") -> "Exynos 1280"
+        normModel.startsWith("SM-A528") || socModel.equals("SM7325", ignoreCase = true) -> "Snapdragon 778G"
+        normModel.startsWith("SM-X21") || socModel.equals("SM6375", ignoreCase = true) -> "Snapdragon 695"
+        socModel.isNotBlank() -> socModel
+        else -> "-"
     }
 
     fun shizukuBinderActive(): Boolean = runCatching { Shizuku.pingBinder() }.getOrDefault(false)

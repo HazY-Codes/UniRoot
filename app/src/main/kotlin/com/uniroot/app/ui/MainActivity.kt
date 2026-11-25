@@ -109,9 +109,13 @@ class MainActivity : ComponentActivity(), Shizuku.OnRequestPermissionResultListe
         ksudNextProfileId = KsudNextProfiles.selected(this)?.id ?: ""
         ksudClassicProfiles = KsudClassicProfiles.list(this)
         ksudClassicProfileId = KsudClassicProfiles.selected(this)?.id ?: ""
-        // New method state: pref + boot-receiver component state + DE prefs.
-        newMethod = getSharedPreferences("uniroot_prefs", MODE_PRIVATE)
-            .getBoolean("root_method_new", false)
+        val appPrefs = getSharedPreferences("uniroot_prefs", MODE_PRIVATE)
+        newMethod = if (appPrefs.contains("root_method_new")) {
+            appPrefs.getBoolean("root_method_new", false)
+        } else {
+            engine.detectDevice().matchedProfileName == null &&
+                com.uniroot.app.engine.DeviceInfoPanel.dirtyFragRootability(this).rootable
+        }
         newMethodBootEnabled = runCatching {
             packageManager.getComponentEnabledSetting(
                 android.content.ComponentName(
