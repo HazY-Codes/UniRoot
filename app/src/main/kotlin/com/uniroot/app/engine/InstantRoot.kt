@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.core.content.FileProvider
 import java.io.File
+import com.uniroot.app.newmethod.DfKsudUpdater
 
 /**
  * "Instant root" (DFReroot second stage) — https://github.com/polygraphene/DFReroot
@@ -239,7 +240,11 @@ class InstantRoot(private val context: Context, private val log: (String) -> Uni
      *
      * Needs live root (exploit socket or su).
      */
-    fun stageProfileKsud(ksudPath: String, flavor: String): Boolean {
+    /**
+     * Stage the profile's ksud binary for the selected kernel manager.
+     * Added `manager` parameter to support SukiSU‑Nova and future managers.
+     */
+    fun stageProfileKsud(ksudPath: String, flavor: String, manager: com.uniroot.app.engine.KernelManagerType = com.uniroot.app.engine.KernelManagerType.AUTO): Boolean {
         if (ksudPath.isBlank()) return false
         val flavorTag = if (flavor == "kernelsu_next") "next" else "ksu"
         val persistentName = if (flavor == "kernelsu_next") "ksud-next" else "ksud-classic"
